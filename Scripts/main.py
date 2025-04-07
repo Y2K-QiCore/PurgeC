@@ -42,6 +42,7 @@ class CleanerThread(QThread):
 
             for cmd in self.commands:
                 try:
+                    # 确保命令以管理员权限运行，subprocess 本身继承当前进程的权限
                     process = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
                     while process.poll() is None:
                         line = process.stdout.readline().strip()
@@ -67,7 +68,6 @@ class CleanerThread(QThread):
     def get_free_space(self):
         """获取系统盘可用空间（字节），使用更可靠的方法"""
         try:
-            # 使用 shutil.disk_usage 或 ctypes 获取可用空间，避免 dir 命令的语言依赖
             drive = os.environ["systemdrive"].rstrip("\\")
             free_bytes = ctypes.c_ulonglong(0)
             ctypes.windll.kernel32.GetDiskFreeSpaceExW(
@@ -83,7 +83,7 @@ class CleanerThread(QThread):
 
 
 class ProcessDialog(QDialog):
-    """显示清理过程的对话框"""
+    """显示清理过程的对话框，清理完成后显示返回按钮"""
 
     def __init__(self, parent, title, commands, calculate_space=False):
         super().__init__(parent)
@@ -92,22 +92,41 @@ class ProcessDialog(QDialog):
         self.setStyleSheet("background-color: #ffffff;")
 
         # 布局
-        layout = QVBoxLayout(self)
-        layout.setSpacing(10)
+        self.layout = QVBoxLayout(self)  # 定义为实例变量以便后续操作
+        self.layout.setSpacing(10)
 
         # 标题
         self.title_label = QLabel(title)
         self.title_label.setFont(QFont("Arial", 14, QFont.Bold))
         self.title_label.setAlignment(Qt.AlignCenter)
         self.title_label.setStyleSheet("color: #333; margin-bottom: 10px;")
-        layout.addWidget(self.title_label)
+        self.layout.addWidget(self.title_label)
 
         # 终端输出区域
         self.output_text = QTextEdit()
         self.output_text.setReadOnly(True)
         self.output_text.setFont(QFont("Consolas", 10))
         self.output_text.setStyleSheet("background-color: #f0f0f0; border: 1px solid #ddd; padding: 5px;")
-        layout.addWidget(self.output_text)
+        self.layout.addWidget(self.output_text)
+
+        # 返回按钮（初始隐藏）
+        self.return_button = QPushButton("返回")
+        self.return_button.setFont(QFont("Arial", 12))
+        self.return_button.setStyleSheet("""
+            QPushButton {
+                background-color: #2196F3;
+                color: white;
+                padding: 8px;
+                border-radius: 5px;
+                margin: 10px 200px;
+            }
+            QPushButton:hover {
+                background-color: #1976D2;
+            }
+        """)
+        self.return_button.clicked.connect(self.accept)  # 点击返回关闭对话框
+        self.return_button.hide()  # 初始隐藏
+        self.layout.addWidget(self.return_button)
 
         # 在线程启动前立即显示提示
         self.append_output("正在进行清理，请稍等......")
@@ -123,16 +142,16 @@ class ProcessDialog(QDialog):
         self.output_text.append(text)
 
     def on_finished(self, freed_mb):
-        """清理完成"""
+        """清理完成，显示返回按钮"""
         if freed_mb >= 0:
             self.output_text.append(f"\n清理完成，释放空间约 {freed_mb:.2f} MB")
         else:
             self.output_text.append("\n清理完成！")
-        self.accept()  # 关闭对话框
+        self.return_button.show()  # 显示返回按钮，而不是直接关闭
 
 
 class DiskCleanerWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self):  # 修正方法名：init -> __init__
         super().__init__()
         self.setWindowTitle("系统深度清理工具")
         self.setGeometry(100, 100, 500, 400)
@@ -146,7 +165,7 @@ class DiskCleanerWindow(QMainWindow):
         self.layout.setSpacing(15)
 
         # 标题
-        self.title_label = QLabel("系统深度清理工具")
+        self.title_label = QLabel("C盘深度清理工具")
         self.title_label.setFont(QFont("Arial", 20, QFont.Bold))
         self.title_label.setAlignment(Qt.AlignCenter)
         self.title_label.setStyleSheet("color: #333; margin-bottom: 20px;")
@@ -155,7 +174,7 @@ class DiskCleanerWindow(QMainWindow):
         # 创建清理按钮
         self.create_button("清理临时文件、缓存和日志", self.clean_temp, "#4CAF50")
         self.create_button("执行系统组件深度清理", self.clean_components, "#2196F3")
-        self.create_button("删除旧的系统还原点", self.clean_shadows, "#FF5722")  # 修复颜色代码中的乱码
+        self.create_button("删除旧的系统还原点", self.clean_shadows, "#FF5722")
         self.create_button("清空回收站", self.clean_recyclebin, "#9C27B0")
         self.create_button("清理用户下载文件夹", self.clean_downloads, "#F44336")
 
@@ -247,7 +266,7 @@ class DiskCleanerWindow(QMainWindow):
                 dialog.exec_()
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # 修正变量名：name -> __name__
     if not is_admin():
         run_as_admin()
     app = QApplication(sys.argv)
