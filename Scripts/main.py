@@ -17,8 +17,12 @@ def is_admin():
 def run_as_admin():
     """以管理员身份重新运行程序"""
     if not is_admin():
-        ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, " ".join(sys.argv), None, 1)
-        sys.exit(0)
+        try:
+            ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, " ".join(sys.argv), None, 1)
+            sys.exit(0)
+        except Exception as e:
+            QMessageBox.critical(None, "错误", f"无法提升权限: {str(e)}")
+            sys.exit(1)
 
 class CleanerThread(QThread):
     """清理任务的线程，发送终端输出"""
@@ -32,34 +36,50 @@ class CleanerThread(QThread):
         self.free_space_before = 0
 
     def run(self):
-        if self.calculate_space:
-            self.free_space_before = self.get_free_space()
+        try:
+            if self.calculate_space:
+                self.free_space_before = self.get_free_space()
 
-        for cmd in self.commands:
-            process = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-            while process.poll() is None:
-                line = process.stdout.readline().strip()
-                if line:
-                    self.output_signal.emit(line)
-            # 获取最后几行输出
-            for line in process.stdout.readlines():
-                if line.strip():
-                    self.output_signal.emit(line.strip())
+            for cmd in self.commands:
+                try:
+                    process = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                    while process.poll() is None:
+                        line = process.stdout.readline().strip()
+                        if line:
+                            self.output_signal.emit(line)
+                    # 获取最后几行输出
+                    for line in process.stdout.readlines():
+                        if line.strip():
+                            self.output_signal.emit(line.strip())
+                except Exception as e:
+                    self.output_signal.emit(f"执行命令 '{cmd}' 出错: {str(e)}")
 
-        freed_mb = -1
-        if self.calculate_space:
-            free_space_after = self.get_free_space()
-            freed_mb = (free_space_after - self.free_space_before) / (1024 * 1024)
+            freed_mb = -1
+            if self.calculate_space:
+                free_space_after = self.get_free_space()
+                freed_mb = (free_space_after - self.free_space_before) / (1024 * 1024) if free_space_after >= 0 else -1
 
-        self.finished_signal.emit(freed_mb)
+            self.finished_signal.emit(freed_mb)
+        except Exception as e:
+            self.output_signal.emit(f"清理过程中发生错误: {str(e)}")
+            self.finished_signal.emit(-1)
 
     def get_free_space(self):
-        """获取系统盘可用空间（字节）"""
-        result = subprocess.run(f'dir {os.environ["systemdrive"]} /-c', shell=True, capture_output=True, text=True)
-        for line in result.stdout.splitlines():
-            if "可用字节" in line:
-                return int(line.split()[-2].replace(",", ""))
-        return 0
+        """获取系统盘可用空间（字节），使用更可靠的方法"""
+        try:
+            # 使用 shutil.disk_usage 或 ctypes 获取可用空间，避免 dir 命令的语言依赖
+            drive = os.environ["systemdrive"].rstrip("\\")
+            free_bytes = ctypes.c_ulonglong(0)
+            ctypes.windll.kernel32.GetDiskFreeSpaceExW(
+                ctypes.c_wchar_p(drive),
+                None,
+                None,
+                ctypes.byref(free_bytes)
+            )
+            return free_bytes.value
+        except Exception as e:
+            self.output_signal.emit(f"获取磁盘空间失败: {str(e)}")
+            return -1
 
 
 class ProcessDialog(QDialog):
@@ -86,8 +106,11 @@ class ProcessDialog(QDialog):
         self.output_text = QTextEdit()
         self.output_text.setReadOnly(True)
         self.output_text.setFont(QFont("Consolas", 10))
-        self.output_text.setStyleSheet("background-color: #f0f0f0; border: 1px solid #ddd; padding: 5 SRT5px;")
+        self.output_text.setStyleSheet("background-color: #f0f0f0; border: 1px solid #ddd; padding: 5px;")
         layout.addWidget(self.output_text)
+
+        # 在线程启动前立即显示提示
+        self.append_output("正在进行清理，请稍等......")
 
         # 线程
         self.thread = CleanerThread(commands, calculate_space)
@@ -132,7 +155,7 @@ class DiskCleanerWindow(QMainWindow):
         # 创建清理按钮
         self.create_button("清理临时文件、缓存和日志", self.clean_temp, "#4CAF50")
         self.create_button("执行系统组件深度清理", self.clean_components, "#2196F3")
-        self.create_button("删除旧的系统还原点", self.clean_shadows, "#FF5722")
+        self.create_button("删除旧的系统还原点", self.clean_shadows, "#FF5722")  # 修复颜色代码中的乱码
         self.create_button("清空回收站", self.clean_recyclebin, "#9C27B0")
         self.create_button("清理用户下载文件夹", self.clean_downloads, "#F44336")
 
